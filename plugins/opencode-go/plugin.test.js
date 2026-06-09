@@ -9,11 +9,11 @@ const loadPlugin = async () => {
   return globalThis.__openusage_plugin;
 };
 
-function setAuth(ctx, value = "go-key") {
+function setAuth(ctx, value = "go-key", providerId = "opencode-go") {
   ctx.host.fs.writeText(
     AUTH_PATH,
     JSON.stringify({
-      "opencode-go": { type: "api-key", key: value },
+      [providerId]: { type: "api-key", key: value },
     }),
   );
 }
@@ -22,16 +22,21 @@ function setHistoryQuery(ctx, rows, options = {}) {
   const list = Array.isArray(rows) ? rows : [];
   ctx.host.sqlite.query.mockImplementation((dbPath, sql) => {
     expect(dbPath).toBe("~/.local/share/opencode/opencode.db");
+    const text = String(sql);
 
-    if (String(sql).includes("SELECT 1 AS present")) {
+    if (text.includes("FROM session")) {
+      return JSON.stringify([]);
+    }
+
+    if (text.includes("SELECT 1 AS present")) {
       if (options.assertFilters !== false) {
-        expect(String(sql)).toContain(
+        expect(text).toContain(
           "json_extract(data, '$.providerID') = 'opencode-go'",
         );
-        expect(String(sql)).toContain(
+        expect(text).toContain(
           "json_extract(data, '$.role') = 'assistant'",
         );
-        expect(String(sql)).toContain(
+        expect(text).toContain(
           "json_type(data, '$.cost') IN ('integer', 'real')",
         );
       }
@@ -39,21 +44,41 @@ function setHistoryQuery(ctx, rows, options = {}) {
     }
 
     if (options.assertFilters !== false) {
-      expect(String(sql)).toContain(
+      expect(text).toContain(
         "json_extract(data, '$.providerID') = 'opencode-go'",
       );
-      expect(String(sql)).toContain(
+      expect(text).toContain(
         "json_extract(data, '$.role') = 'assistant'",
       );
-      expect(String(sql)).toContain(
+      expect(text).toContain(
         "json_type(data, '$.cost') IN ('integer', 'real')",
       );
-      expect(String(sql)).toContain(
+      expect(text).toContain(
         "COALESCE(json_extract(data, '$.time.created'), time_created)",
       );
     }
 
     return JSON.stringify(list);
+  });
+}
+
+function setSessionQuery(ctx, rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  ctx.host.sqlite.query.mockImplementation((dbPath, sql) => {
+    expect(dbPath).toBe("~/.local/share/opencode/opencode.db");
+    const text = String(sql);
+
+    if (text.includes("FROM session")) {
+      if (text.includes("SELECT 1 AS present")) {
+        expect(text).toContain("COALESCE(tokens_input, 0)");
+        return JSON.stringify(list.length > 0 ? [{ present: 1 }] : []);
+      }
+      expect(text).toContain("json_extract(model, '$.providerID')");
+      expect(text).toContain("COALESCE(tokens_input, 0)");
+      return JSON.stringify(list);
+    }
+
+    return JSON.stringify([]);
   });
 }
 
@@ -118,6 +143,18 @@ describe("opencode-go plugin", () => {
     expect(result.lines[0].resetsAt).toBe("2026-03-06T17:00:00.000Z");
     expect(result.lines[1].resetsAt).toBe("2026-03-09T00:00:00.000Z");
     expect(result.lines[2].resetsAt).toBe("2026-04-01T00:00:00.000Z");
+    expect(result.lines.every((line) => line.format.kind === "dollars")).toBe(
+      true,
+    );
+  });
+
+  it("detects the current OpenCode auth provider key", async () => {
+    const ctx = makeCtx();
+    setAuth(ctx, "go-key", "opencode");
+    setHistoryQuery(ctx, []);
+
+    const plugin = await loadPlugin();
+    expect(plugin.probe(ctx).plan).toBe("Go");
   });
 
   it("enables with history only when auth is absent", async () => {
@@ -133,7 +170,8 @@ describe("opencode-go plugin", () => {
     const result = plugin.probe(ctx);
 
     expect(result.plan).toBe("Go");
-    expect(result.lines[0].used).toBe(25);
+    expect(result.lines[0].used).toBe(3);
+    expect(result.lines[0].limit).toBe(12);
   });
 
   it("uses row timestamp fallback when JSON timestamp is missing", async () => {
@@ -148,7 +186,7 @@ describe("opencode-go plugin", () => {
     const plugin = await loadPlugin();
     const result = plugin.probe(ctx);
 
-    expect(result.lines[0].used).toBe(10);
+    expect(result.lines[0].used).toBe(1.2);
     expect(result.lines[0].resetsAt).toBe("2026-03-06T14:30:00.000Z");
   });
 
@@ -166,7 +204,7 @@ describe("opencode-go plugin", () => {
     const plugin = await loadPlugin();
     const result = plugin.probe(ctx);
 
-    expect(result.lines[0].used).toBe(30);
+    expect(result.lines[0].used).toBe(3.6);
     expect(result.lines[0].resetsAt).toBe("2026-03-06T13:00:00.000Z");
   });
 
@@ -185,7 +223,7 @@ describe("opencode-go plugin", () => {
     const result = plugin.probe(ctx);
     const weeklyLine = result.lines.find((line) => line.label === "Weekly");
 
-    expect(weeklyLine.used).toBe(30);
+    expect(weeklyLine.used).toBe(9);
     expect(weeklyLine.resetsAt).toBe("2026-03-09T00:00:00.000Z");
   });
 
@@ -204,12 +242,12 @@ describe("opencode-go plugin", () => {
     const result = plugin.probe(ctx);
     const monthlyLine = result.lines.find((line) => line.label === "Monthly");
 
-    expect(monthlyLine.used).toBe(4.5);
+    expect(monthlyLine.used).toBe(2.6714);
     expect(monthlyLine.resetsAt).toBe("2026-03-25T07:53:16.000Z");
     expect(monthlyLine.periodDurationMs).toBe(28 * 24 * 60 * 60 * 1000);
   });
 
-  it("clamps percentages at 100", async () => {
+  it("allows spend to exceed the published limit", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T12:00:00.000Z"));
 
@@ -221,7 +259,56 @@ describe("opencode-go plugin", () => {
     const plugin = await loadPlugin();
     const result = plugin.probe(ctx);
 
-    expect(result.lines[0].used).toBe(100);
+    expect(result.lines[0].used).toBe(40);
+    expect(result.lines[0].limit).toBe(12);
+  });
+
+  it("estimates current session rows for OpenCode provider only", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-06T12:00:00.000Z"));
+
+    const ctx = makeCtx();
+    setSessionQuery(ctx, [
+      {
+        createdMs: Date.parse("2026-03-06T11:00:00.000Z"),
+        modelId: "glm-5.1:cloud",
+        providerId: "opencode",
+        inputTokens: 1000000,
+        outputTokens: 500000,
+        reasoningTokens: 0,
+        cacheReadTokens: 1000000,
+        cacheWriteTokens: 0,
+        cost: 0,
+      },
+      {
+        createdMs: Date.parse("2026-03-06T11:05:00.000Z"),
+        modelId: "glm-5.1:cloud",
+        providerId: "ollama2",
+        inputTokens: 1000000,
+        outputTokens: 500000,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        cost: 0,
+      },
+      {
+        createdMs: Date.parse("2026-03-06T11:10:00.000Z"),
+        modelId: "deepseek-v4-flash-free",
+        providerId: "opencode",
+        inputTokens: 1000000,
+        outputTokens: 500000,
+        reasoningTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        cost: 0,
+      },
+    ]);
+
+    const plugin = await loadPlugin();
+    const result = plugin.probe(ctx);
+
+    expect(result.lines[0].used).toBe(3.86);
+    expect(result.lines[0].format).toEqual({ kind: "dollars" });
   });
 
   it("returns a soft empty state when sqlite is unreadable but auth exists", async () => {

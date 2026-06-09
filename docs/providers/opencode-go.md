@@ -13,14 +13,33 @@
 
 The plugin enables when either condition is true:
 
-- `~/.local/share/opencode/auth.json` contains an `opencode-go` entry with a non-empty `key`
+- `~/.local/share/opencode/auth.json` contains an `opencode-go` or `opencode` entry with a non-empty `key`
 - local OpenCode history already contains `opencode-go` assistant messages with numeric `cost`
+- local OpenCode session history already contains token usage
 
 If neither signal exists, the plugin stays hidden.
 
 ## Data Source
 
-OpenUsage reads the local OpenCode SQLite database directly:
+OpenUsage reads the local OpenCode SQLite database directly. Current OpenCode versions store usage on `session`:
+
+```sql
+SELECT
+  time_created,
+  json_extract(model, '$.id') AS modelId,
+  json_extract(model, '$.providerID') AS providerId,
+  tokens_input,
+  tokens_output,
+  tokens_reasoning,
+  tokens_cache_read,
+  tokens_cache_write,
+  cost
+FROM session
+```
+
+Only rows whose model provider is `opencode` are estimated as Go usage. `*-free` models count as `$0`. Other provider rows, such as Ollama cloud history with similar model names, are ignored.
+
+Older OpenCode history is still supported through assistant messages:
 
 ```sql
 SELECT
@@ -35,6 +54,8 @@ WHERE json_valid(data)
 
 Only assistant messages with numeric `cost` count. Missing remote or other-device usage is not estimated.
 
+When current `session.cost` is `0`, OpenUsage estimates cost from the local token columns using the published OpenCode Go prices per 1M tokens. If OpenCode later records a non-zero local `cost`, that value is used directly.
+
 ## Limits
 
 OpenUsage uses the current published OpenCode Go plan limits from the official docs:
@@ -43,7 +64,7 @@ OpenUsage uses the current published OpenCode Go plan limits from the official d
 - `Weekly`: `$30`
 - `Monthly`: `$60`
 
-Bars show observed local spend as a percentage of those fixed limits and clamp at `100%`.
+Bars show observed local spend against those fixed dollar limits.
 
 ## Window Rules
 
