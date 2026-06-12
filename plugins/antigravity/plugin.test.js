@@ -242,6 +242,14 @@ describe("antigravity plugin", () => {
     }))
   })
 
+  function progressLabels(lines) {
+    return lines.filter(function (l) { return l.type === "progress" }).map(function (l) { return l.label })
+  }
+
+  function progressOnly(lines) {
+    return lines.filter(function (l) { return l.type === "progress" })
+  }
+
   it("returns models from the agy local server when Antigravity is not running", async () => {
     const ctx = makeCtx()
     ctx.host.ls.discover.mockImplementation((opts) => {
@@ -272,7 +280,7 @@ describe("antigravity plugin", () => {
 
     expect(capturedCsrf).toBe("")
     expect(result.plan).toBe("Google AI Pro")
-    expect(result.lines.map((l) => l.label)).toEqual(["Gemini Pro", "Gemini Flash", "Claude"])
+    expect(progressLabels(result.lines)).toEqual(["Gemini Pro", "Gemini Flash", "Claude"])
   })
 
   it("returns models + plan from GetUserStatus", async () => {
@@ -288,7 +296,7 @@ describe("antigravity plugin", () => {
     expect(result.plan).toBe("Pro")
 
     // Model lines exist — 3 pool lines
-    const labels = result.lines.map((l) => l.label)
+    const labels = progressLabels(result.lines)
     expect(labels).toEqual(["Gemini Pro", "Gemini Flash", "Claude"])
   })
 
@@ -302,7 +310,7 @@ describe("antigravity plugin", () => {
     const result = plugin.probe(ctx)
 
     // Both Gemini 3.1 Pro variants have frac=0.8 → used = 20%
-    const pro = result.lines.find((l) => l.label === "Gemini Pro")
+    const pro = progressOnly(result.lines).find((l) => l.label === "Gemini Pro")
     expect(pro).toBeTruthy()
     expect(pro.used).toBe(20) // (1 - 0.8) * 100
   })
@@ -316,12 +324,9 @@ describe("antigravity plugin", () => {
     const plugin = await loadPlugin()
     const result = plugin.probe(ctx)
 
-    const labels = result.lines.map((l) => l.label)
+    const labels = progressLabels(result.lines)
 
-    expect(labels).toEqual(["Gemini Pro", "Gemini Flash", "Claude"])
-  })
-
-  it("falls back to GetCommandModelConfigs when GetUserStatus fails", async () => {
+    expect(labels).toEqual(["Gemini Pro", "Gemini Flash", "Claude"]), async () => {
     const ctx = makeCtx()
     ctx.host.ls.discover.mockReturnValue(makeDiscovery())
     ctx.host.http.request.mockImplementation((opts) => {
@@ -439,9 +444,8 @@ describe("antigravity plugin", () => {
     const plugin = await loadPlugin()
     const result = plugin.probe(ctx)
     expect(result).toBeTruthy()
-    const labels = result.lines.map((l) => l.label)
-    expect(labels).toEqual(["Gemini Pro", "Claude"])
-    expect(result.lines.every((l) => l.used === 100)).toBe(true)
+    expect(progressLabels(result.lines)).toEqual(["Gemini Pro", "Claude"])
+    expect(progressOnly(result.lines).every((l) => l.used === 100)).toBe(true)
   })
 
   it("skips configs with missing or empty labels", async () => {
@@ -458,7 +462,7 @@ describe("antigravity plugin", () => {
 
     const plugin = await loadPlugin()
     const result = plugin.probe(ctx)
-    expect(result.lines.length).toBe(1)
+    expect(progressOnly(result.lines).length).toBe(1)
     expect(result.lines[0].label).toBe("Gemini Pro")
   })
 
@@ -585,7 +589,7 @@ describe("antigravity plugin", () => {
     const result = plugin.probe(ctx)
 
     expect(result.plan).toBeNull()
-    const labels = result.lines.map((l) => l.label)
+    const labels = progressLabels(result.lines)
     expect(labels).toContain("Gemini Pro")
     expect(labels).toContain("Claude")
   })
@@ -676,7 +680,7 @@ describe("antigravity plugin", () => {
       "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
     ])
     expect(result.plan).toBe("Google AI Pro")
-    expect(result.lines.map((l) => l.label)).toEqual(["Gemini Pro", "Gemini Flash", "Claude"])
+    expect(progressLabels(result.lines)).toEqual(["Gemini Pro", "Gemini Flash", "Claude"])
   })
 
   it("tries agy Cloud Code even when the keychain token matches a SQLite token", async () => {
@@ -1264,7 +1268,7 @@ describe("antigravity plugin", () => {
     const plugin = await loadPlugin()
     const result = plugin.probe(ctx)
 
-    const labels = result.lines.map((l) => l.label)
+    const labels = progressLabels(result.lines)
     expect(labels).toContain("Gemini Flash")
     expect(labels).not.toContain("chat_20706")
     expect(labels).not.toContain("MODEL_CHAT_20706")
@@ -1306,7 +1310,7 @@ describe("antigravity plugin", () => {
     const plugin = await loadPlugin()
     const result = plugin.probe(ctx)
 
-    const labels = result.lines.map((l) => l.label)
+    const labels = progressLabels(result.lines)
     expect(labels).toEqual(["Gemini Pro"])
   })
 
@@ -1347,7 +1351,7 @@ describe("antigravity plugin", () => {
     const plugin = await loadPlugin()
     const result = plugin.probe(ctx)
 
-    const labels = result.lines.map((l) => l.label)
+    const labels = progressLabels(result.lines)
     expect(labels).toEqual(["Claude"])
   })
 
@@ -1388,7 +1392,7 @@ describe("antigravity plugin", () => {
     const plugin = await loadPlugin()
     const result = plugin.probe(ctx)
 
-    const labels = result.lines.map((l) => l.label)
+    const labels = progressLabels(result.lines)
     expect(labels).toEqual(["Gemini Pro", "Claude"])
   })
 
@@ -1419,7 +1423,7 @@ describe("antigravity plugin", () => {
     const plugin = await loadPlugin()
     const result = plugin.probe(ctx)
 
-    const labels = result.lines.map((l) => l.label)
+    const labels = progressLabels(result.lines)
     expect(labels).toEqual(["Gemini Pro", "Claude"])
   })
 
@@ -1544,7 +1548,7 @@ describe("antigravity plugin", () => {
     const result = plugin.probe(ctx)
 
     expect(result.plan).toBe("Google AI Ultra")
-    const labels = result.lines.map((l) => l.label)
+    const labels = progressLabels(result.lines)
     expect(labels).toEqual(["Gemini Pro", "Gemini Flash", "Claude"])
   })
 

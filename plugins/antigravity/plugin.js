@@ -396,6 +396,33 @@
     })
   }
 
+  function pushModelBreakdown(ctx, lines, configs) {
+    var seen = {}
+    var items = []
+    for (var i = 0; i < configs.length; i++) {
+      var c = configs[i]
+      var label = normalizeLabel(typeof c.label === "string" ? c.label : "")
+      if (!label || seen[label]) continue
+      seen[label] = true
+      var frac = (c.quotaInfo && typeof c.quotaInfo.remainingFraction === "number") ? c.quotaInfo.remainingFraction : 0
+      items.push({ label: label, frac: frac })
+    }
+    items.sort(function (a, b) {
+      return a.frac - b.frac
+    })
+    for (var j = 0; j < items.length; j++) {
+      var clamped = Math.max(0, Math.min(1, items[j].frac))
+      var used = Math.round((1 - clamped) * 1000) / 10
+      var pct
+      if (used > 0 && used < 0.1) pct = "<0.1%"
+      else pct = String(used) + "%"
+      lines.push(ctx.line.text({
+        label: items[j].label,
+        value: pct,
+      }))
+    }
+  }
+
   function buildModelLines(ctx, configs) {
     var deduped = {}
     for (var i = 0; i < configs.length; i++) {
@@ -549,8 +576,10 @@
     }
     if (!quotaData || quotaData._authFailed) return quotaData
 
-    var lines = buildModelLines(ctx, parseAgyQuotaBuckets(quotaData))
+    var buckets = parseAgyQuotaBuckets(quotaData)
+    var lines = buildModelLines(ctx, buckets)
     if (lines.length === 0) return null
+    pushModelBreakdown(ctx, lines, buckets)
     return { plan: readAgyPlan(loadData), lines: lines }
   }
 
@@ -623,6 +652,7 @@
       }
     }
 
+    pushModelBreakdown(ctx, lines, filtered)
     return { plan: plan, lines: lines }
   }
 
@@ -702,7 +732,10 @@
     if (ccData && !ccData._authFailed) {
       var configs = parseCloudCodeModels(ccData)
       var lines = buildModelLines(ctx, configs)
-      if (lines.length > 0) return { plan: null, lines: lines }
+      if (lines.length > 0) {
+        pushModelBreakdown(ctx, lines, configs)
+        return { plan: null, lines: lines }
+      }
     }
 
     throw LOGIN_MESSAGE
